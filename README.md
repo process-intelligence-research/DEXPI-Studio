@@ -21,12 +21,20 @@ search, and export models quickly without writing scripts.
 
 ## Download
 
-Ready-to-run applications for Windows and macOS are on the
+Ready-to-run applications for Windows, macOS and Linux are on the
 [DEXPI Studio page](https://www.pi-research.org/research/software/dexpi-studio/) and under
 [Releases](https://github.com/process-intelligence-research/DEXPI-Studio/releases). No Python
-installation is needed. The builds are not code-signed yet, so the operating system warns on
-first start: on macOS, right-click the app and choose **Open**; on Windows, choose
-**More info → Run anyway**.
+installation is needed.
+
+> [!IMPORTANT]
+> **Two limits of the current builds:**
+>
+> - **macOS: Apple silicon only.** The Mac build runs on Macs with an M-series chip (M1 or
+>   later), not on Intel Macs. On an Intel Mac, run DEXPI Studio from source (see
+>   [Quick Start](#quick-start)).
+> - **Not code-signed yet.** Windows and macOS warn on the first start. On Windows, choose
+>   **More info → Run anyway**. On macOS, right-click the app and choose **Open**; if macOS
+>   still refuses, open **System Settings → Privacy & Security** and choose **Open Anyway**.
 
 ## Features
 
