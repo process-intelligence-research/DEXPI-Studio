@@ -9,6 +9,10 @@ Desktop GUI for exploring DEXPI P&ID models with [pyDEXPI](https://github.com/pr
   <img src="https://img.shields.io/badge/local--first-no%20telemetry-green" alt="Local first">
 </p>
 
+<p align="center">
+  <img src="docs/images/main_window.png" alt="DEXPI Studio showing the DEXPI reference P&amp;ID, with heat exchanger H1007 selected and its properties listed" width="900">
+</p>
+
 ## Why DEXPI Studio?
 
 DEXPI models are machine-readable and rich, but many workflows still need code-first tooling.
