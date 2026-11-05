@@ -43,7 +43,9 @@ installation is needed.
 - Navigate model tree + inspect properties
 - Always-visible in-app model search with compact result dropdown
 - Select and highlight objects between tree and diagram
-- Validate a model with pyDEXPI's rules and review the issues
+- Validate as you open a file: an Issues panel lists what the loader could not read and where
+  the model breaks DEXPI's requirements or pyDEXPI's conventions, and selects the objects
+  involved
 - Summary of a model's equipment, piping and instruments, with their tags
 - Compare two models (pyDEXPI's diff)
 - Export through pyDEXPI, with its options: GraphML, Neo4j CSV and LLM context at any graph
@@ -68,7 +70,7 @@ python -m dexpi_studio.app
 2. **Search** objects in the top search bar (`Ctrl+F`)
 3. **Select** an item from tree, diagram, or search results
 4. **Inspect** properties in the right panel
-5. **Validate** (`Ctrl+Shift+V`) and review logs
+5. Review the **Issues** panel; **Validate** (`Ctrl+Shift+V`) checks the model again
 6. **Export** (`Ctrl+E`) to your desired downstream format
 
 ## Keyboard Shortcuts

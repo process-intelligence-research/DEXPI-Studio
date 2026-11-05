@@ -12,7 +12,6 @@ from dexpi_studio.core.pydexpi_adapter import (
     model_summary_text,
     run_export,
     summary_counts,
-    validation_status,
 )
 from dexpi_studio.gui.widgets.summary_dialog import SummaryDialog
 
@@ -84,10 +83,3 @@ def test_the_projection_can_leave_out_the_drawing(model, tmp_path):
     run_export(model, "Git projection", engineering, {"include_graphics": False})
 
     assert engineering.stat().st_size < full.stat().st_size
-
-
-def test_the_validation_status_counts_issues_by_level():
-    assert validation_status([{"level": "info"}]) == "Validation: no issues found."
-    assert validation_status([{"level": "error"}, {"level": "error"}, {"level": "warning"}]) == (
-        "Validation: 2 mandatory and 1 recommended issue(s); see the Logs panel."
-    )

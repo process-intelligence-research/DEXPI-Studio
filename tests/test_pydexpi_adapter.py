@@ -15,7 +15,6 @@ from dexpi_studio.core.pydexpi_adapter import (
     related_function_ids_for_process_instrumentation_function,
     render_svg,
     run_export,
-    validate_model,
 )
 
 
@@ -112,29 +111,6 @@ def test_render_svg_draws_the_rest_when_a_shape_did_not_load():
 
     assert result is not None and "<svg" in result
     assert all(usage.shape is None for usage in shapeless)  # the model is not changed
-
-
-def test_validate_model_returns_messages(sample_model):
-    """validate_model should return a list of message dicts."""
-    messages = validate_model(sample_model)
-    assert isinstance(messages, list)
-    assert len(messages) > 0
-    for msg in messages:
-        assert "level" in msg
-        assert "message" in msg
-        assert "source" in msg
-        assert msg["level"] in ("info", "warning", "error")
-
-
-def test_validate_model_no_diagram():
-    """An empty model without a diagram is reported, at a level the panel can show."""
-    from pydexpi.pydexpi_classes import EngineeringModel, PlantModel
-
-    model = EngineeringModel(conceptualModel=PlantModel())
-    messages = validate_model(model)
-    levels = [m["level"] for m in messages]
-    assert levels
-    assert "error" not in levels
 
 
 def test_run_export_optional_image_png(monkeypatch, sample_model, tmp_path):

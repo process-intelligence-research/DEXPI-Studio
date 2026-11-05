@@ -8,8 +8,10 @@
 
 ### Validation depth
 
-- Validation is primarily schema + structural checks
+- Validation runs pyDEXPI's built-in rules: DEXPI's multiplicities and structural requirements
+  (Mandatory) and pyDEXPI's conventions (Recommended)
 - No configurable domain-rule packs in-app
+- A process model has no drawing, so its issues select objects in the model tree only
 
 ### Scale and performance
 

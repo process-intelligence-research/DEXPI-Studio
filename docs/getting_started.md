@@ -31,7 +31,8 @@ python -m dexpi_studio.app
 2. Use the top search bar (`Ctrl+F`) to find objects quickly
 3. Select a result, tree node, or diagram object
 4. Inspect attributes in the **Properties** panel
-5. Run **Validate / Check** (`Ctrl+Shift+V`)
+5. Review the **Issues** panel: the file is validated as it opens, and **Validate / Check**
+   (`Ctrl+Shift+V`) checks it again. Select an issue to select its objects.
 6. Export with **File → Export** (`Ctrl+E`)
 
 ## Keyboard shortcuts

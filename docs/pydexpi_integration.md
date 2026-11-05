@@ -60,7 +60,13 @@ All export logic is delegated to pyDEXPI exporters.
 
 ## Known boundaries
 
-- Validation remains mostly structural (schema-first)
+- Files are loaded with `load_xml_with_report` / `load_json_with_report`, which keep the
+  loader's error registry; the plain loaders discard it, so a file read in part would look whole
+- Validation runs `pydexpi.validation.validate`; `core/issues.py` puts its issues and the
+  loader's entries into one list for the Issues panel
+- pyDEXPI 2.1.0's SVG renderer raises on a `ShapeUsage` without a shape or a
+  `RepresentationGroup` without the object it represents, which a strict load leaves when it
+  refuses an object; `render_svg` draws a copy without them
 - Rendering is still pyDEXPI-driven; GUI adds interaction overlays
 - Some complex model semantics remain raw pyDEXPI object structures
 

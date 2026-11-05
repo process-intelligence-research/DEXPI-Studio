@@ -33,6 +33,13 @@ from PySide6.QtWidgets import (
 
 from dexpi_studio import __version__
 from dexpi_studio.core.capabilities import detect_capabilities
+from dexpi_studio.core.issues import (
+    IssueReport,
+    issues_from_loading,
+    status_text,
+    validate as validate_model,
+    write_csv,
+)
 from dexpi_studio.core.model_tree import TreeNode, build_model_tree
 from dexpi_studio.core.pydexpi_adapter import (
     build_diagram_render_manifest,
@@ -40,13 +47,11 @@ from dexpi_studio.core.pydexpi_adapter import (
     classify_ids,
     collect_highlight_ids,
     load_dexpi_file,
-    load_proteus_file,
+    load_file_with_report,
     model_summary,
     render_svg,
     run_diff,
     run_export,
-    validate_model,
-    validation_status,
 )
 from dexpi_studio.core.selection import extract_properties
 from dexpi_studio.gui.actions import create_actions
@@ -55,6 +60,7 @@ from dexpi_studio.gui.selection_model import SelectionModel
 from dexpi_studio.gui.widgets.assistant_panel import AssistantPanel
 from dexpi_studio.gui.widgets.assistant_settings_dialog import AssistantSettingsDialog
 from dexpi_studio.gui.widgets.export_dialog import ExportDialog
+from dexpi_studio.gui.widgets.issues_panel import IssuesPanel
 from dexpi_studio.gui.widgets.messages_panel import MessagesPanel
 from dexpi_studio.gui.widgets.model_tree import ModelTreeWidget
 from dexpi_studio.gui.widgets.properties_panel import PropertiesPanel
@@ -83,6 +89,9 @@ class MainWindow(QMainWindow):
         self._model = None
         self._model_tree: TreeNode | None = None
         self._current_file: Path | None = None
+        self._proteus = False
+        self._lenient = False
+        self._issue_report = IssueReport()
         self._capabilities = detect_capabilities()
         self._selection_model = SelectionModel(self)
         self._id_index: dict[str, object] = {}
@@ -246,7 +255,22 @@ class MainWindow(QMainWindow):
         self._messages_dock.setMinimumHeight(110)
         self._messages_dock.setMaximumHeight(260)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._messages_dock)
+
+        # Bottom dock, beside the logs: what loading and validation found.
+        self._issues_dock = QDockWidget("Issues", self)
+        self._issues_dock.setObjectName("issues_dock")
+        self._issues_panel = IssuesPanel()
+        self._issues_dock.setWidget(self._issues_panel)
+        self._issues_dock.setMinimumHeight(140)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._issues_dock)
+        self.tabifyDockWidget(self._messages_dock, self._issues_dock)
+        self._issues_panel.objects_selected.connect(self._on_issue_objects_selected)
+        self._issues_panel.zoom_requested.connect(self._on_focus_requested)
+        self._issues_panel.revalidate_requested.connect(self.validate)
+        self._issues_panel.lenient_reload_requested.connect(self.reload_leniently)
+        self._issues_panel.export_requested.connect(self.export_issues)
         self._messages_dock.hide()
+        self._issues_dock.hide()
 
         # Default layout balance: keep center canvas visually primary.
         self.resizeDocks(
@@ -269,6 +293,15 @@ class MainWindow(QMainWindow):
         self._diagnostics_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._diagnostics_button.clicked.connect(self.toggle_messages)
         self._status_bar.addPermanentWidget(self._diagnostics_button)
+
+        self._issues_button = QPushButton(self)
+        self._issues_button.setObjectName("issuesSummaryButton")
+        self._issues_button.setFlat(True)
+        self._issues_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._issues_button.setToolTip("Show what loading and validation found")
+        self._issues_button.clicked.connect(self.toggle_issues)
+        self._issues_button.setVisible(False)
+        self._status_bar.insertPermanentWidget(0, self._issues_button)
 
         self._messages_panel.counts_changed.connect(self._update_diagnostics_summary)
         info, warning, error = self._messages_panel.counts()
@@ -360,15 +393,21 @@ class MainWindow(QMainWindow):
         )
         if not file_path:
             return
-        self._load_file(Path(file_path), loader=load_proteus_file)
+        self._load_file(Path(file_path), proteus=True)
 
     def reload_file(self) -> None:
         """Reload the currently open DEXPI file from disk."""
         if self._current_file is None:
             QMessageBox.warning(self, "No File", "Please open a DEXPI file first.")
             return
-        self._load_file(self._current_file)
+        self._load_file(self._current_file, proteus=self._proteus, strict=not self._lenient)
         self._status_bar.showMessage(f"Reloaded: {self._current_file.name}", 2000)
+
+    def reload_leniently(self) -> None:
+        """Load the current file again with pyDEXPI's lenient setting."""
+        if self._current_file is None:
+            return
+        self._load_file(self._current_file, proteus=self._proteus, strict=False)
 
     def close_file(self) -> None:
         """Close the currently loaded file."""
@@ -379,6 +418,8 @@ class MainWindow(QMainWindow):
         self._tree_widget.clear()
         self._props_panel.clear()
         self._messages_panel.clear()
+        self._issues_panel.clear()
+        self._issues_button.setVisible(False)
         self._clear_search_results()
         self._update_ui_state()
 
@@ -500,29 +541,95 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def validate(self) -> None:
-        """Run validation on the loaded model."""
+        """Validate the loaded model again and show what was found."""
         if self._model is None:
             QMessageBox.warning(self, "No File", "Please open a DEXPI file first.")
             return
+        if self._run_validation():
+            self._show_issues()
+            self._status_bar.showMessage(status_text(self._issue_report), 10000)
 
-        self._messages_panel.clear()
+    def _run_validation(self) -> bool:
+        """Validate the model into the issue report; False when validation itself failed."""
         self._status_bar.showMessage("Validating…")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            messages = validate_model(self._model)
+            self._issue_report.validation = validate_model(self._model)
         except Exception as e:
             self._status_bar.clearMessage()
+            self._post_message("error", f"Validation failed: {e}", "Validation")
             QMessageBox.critical(self, "Validation Error", f"Validation failed:\n{e}")
-            return
+            return False
         finally:
             QApplication.restoreOverrideCursor()
-        for msg in messages:
-            self._post_message(msg["level"], msg["message"], msg["source"])
+        self._issues_panel.set_report(
+            self._issue_report, set(self._id_index), self._issue_object_names()
+        )
+        self._update_issues_button()
+        return True
 
-        # The results go to the Logs panel, which starts hidden: show it.
-        self._messages_dock.setVisible(True)
-        self.resizeDocks([self._messages_dock], [170], Qt.Orientation.Vertical)
-        self._status_bar.showMessage(validation_status(messages), 10000)
+    def _issue_object_names(self) -> dict[str, str]:
+        """The display name of every loaded object an issue is about."""
+        from pydexpi import get_display_name
+
+        report = self._issue_report
+        names = {}
+        for oid in {oid for i in report.loading + report.validation for oid in i.object_ids}:
+            obj = self._id_index.get(oid)
+            if obj is not None:
+                names[oid] = get_display_name(obj)
+        return names
+
+    def _show_issues(self) -> None:
+        """Bring the Issues panel to the front."""
+        self._issues_dock.setVisible(True)
+        self._issues_dock.raise_()
+        self.resizeDocks([self._issues_dock], [230], Qt.Orientation.Vertical)
+
+    def toggle_issues(self) -> None:
+        """Show or hide the Issues panel."""
+        if self._issues_dock.isVisible() and not self._issues_dock.visibleRegion().isEmpty():
+            self._issues_dock.hide()
+        else:
+            self._show_issues()
+
+    def _update_issues_button(self) -> None:
+        report = self._issue_report
+        lost = report.count("Error") + report.count("Critical")
+        parts = []
+        if lost:
+            parts.append(f"{lost} loading errors")
+        parts.append(f"{report.count('Mandatory')} mandatory")
+        parts.append(f"{report.count('Recommended')} recommended")
+        self._issues_button.setText("Issues  |  " + "  ".join(parts))
+        colour = "#b91c1c" if report.needs_attention else "#334155"
+        self._issues_button.setStyleSheet(f"color: {colour};")
+        self._issues_button.setVisible(True)
+
+    def export_issues(self) -> None:
+        """Write the issues shown to a CSV file."""
+        report = self._issue_report
+        issues = report.validation + report.loading
+        if not issues:
+            return
+        stem = self._current_file.stem if self._current_file else "model"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Issues", f"{stem}_issues.csv", "CSV Files (*.csv)"
+        )
+        if not file_path:
+            return
+        try:
+            count = write_csv(issues, file_path)
+        except OSError as e:
+            QMessageBox.critical(self, "Export Error", f"Could not write the file:\n{e}")
+            return
+        self._status_bar.showMessage(f"Exported {count} issue(s) to {Path(file_path).name}", 5000)
+
+    def _on_issue_objects_selected(self, object_ids: list[str]) -> None:
+        """Select the first object an issue is about, and highlight all of them."""
+        self._selection_model.select(object_ids[0])
+        if len(object_ids) > 1:
+            self._svg_view.highlight_ids(object_ids)
 
     def fit_to_window(self) -> None:
         """Fit the SVG view to the window."""
@@ -1213,19 +1320,27 @@ class MainWindow(QMainWindow):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load_file(self, path: Path, loader=None) -> None:
-        """Load a DEXPI file and update the UI."""
-        if loader is None:
-            loader = load_dexpi_file
+    def _load_file(self, path: Path, *, proteus: bool = False, strict: bool = True) -> None:
+        """Load a file, report what the loader could not read, validate it and show it."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self._model = loader(path)
-            self._current_file = path
+            model, entries = load_file_with_report(path, strict=strict, proteus=proteus)
         except Exception as e:
-            QMessageBox.critical(self, "Load Error", f"Failed to load file:\n{path}\n\nError: {e}")
+            QApplication.restoreOverrideCursor()
+            self._report_load_failure(path, e, proteus=proteus, strict=strict)
             return
+        QApplication.restoreOverrideCursor()
+        self._model = model
+        self._current_file = path
+        self._proteus = proteus
+        self._lenient = not strict and not proteus
+        self._issue_report = IssueReport(
+            loading=issues_from_loading(entries), lenient=self._lenient
+        )
 
         self._messages_panel.clear()
-        self._post_message("info", f"Loaded: {path.name}", "File")
+        how = " (leniently)" if self._lenient else ""
+        self._post_message("info", f"Loaded{how}: {path.name}", "File")
 
         # Render SVG
         try:
@@ -1271,6 +1386,46 @@ class MainWindow(QMainWindow):
 
         self._selection_model.clear()
         self._update_ui_state()
+
+        # Validate straight away: a file pyDEXPI read in part, or one that breaks DEXPI, says
+        # so as it opens rather than looking like a sound model.
+        if self._run_validation():
+            if self._issue_report.needs_attention:
+                self._show_issues()
+            self._status_bar.showMessage(status_text(self._issue_report), 10000)
+
+    def _report_load_failure(
+        self, path: Path, error: Exception, *, proteus: bool, strict: bool
+    ) -> None:
+        """Say why *path* could not be opened, and offer a lenient load where it may help."""
+        from lxml import etree
+
+        if isinstance(error, etree.XMLSyntaxError):
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                f"{path.name} is not well-formed XML, so nothing could be read from it.\n\n{error}",
+            )
+            return
+        if isinstance(error, ValueError) and strict and not proteus:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Load Error")
+            box.setText(f"{path.name} could not be loaded strictly.")
+            box.setInformativeText(
+                "pyDEXPI refused the file because loading it would lose or change data. "
+                "A lenient load reads what it can and lists everything it left out or "
+                "copied in the Issues panel.\n\nOpen the file leniently?"
+            )
+            box.setDetailedText(str(error))
+            box.setStandardButtons(
+                QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel
+            )
+            box.button(QMessageBox.StandardButton.Open).setText("Open leniently")
+            if box.exec() == QMessageBox.StandardButton.Open:
+                self._load_file(path, proteus=proteus, strict=False)
+            return
+        QMessageBox.critical(self, "Load Error", f"Failed to load file:\n{path}\n\nError: {error}")
 
     def _build_svg_payload(
         self,

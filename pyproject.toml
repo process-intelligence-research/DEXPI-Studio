@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dexpi-studio"
-version = "0.1.0"
+version = "0.1.1"
 description = "A PySide6 desktop GUI companion for pyDEXPI — view, inspect, validate, and export DEXPI P&ID files locally."
 readme = "README.md"
 requires-python = ">=3.12"

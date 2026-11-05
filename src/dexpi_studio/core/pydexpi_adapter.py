@@ -657,6 +657,61 @@ def load_proteus_file(path: str | Path) -> EngineeringModel:
     return serializer.load_from_string(path.read_text(encoding="utf-8"))
 
 
+def load_file_with_report(
+    path: str | Path, *, strict: bool = True, proteus: bool = False
+) -> tuple[EngineeringModel, list]:
+    """Load a file and keep what the loader reported about it.
+
+    :func:`load_dexpi_file` uses pyDEXPI's plain loaders, which discard their error registry:
+    a file they read in part looks like a whole one. This keeps the registry, so the user can
+    be told what was left out.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to the file.
+    strict : bool, optional
+        pyDEXPI's ``strict`` setting. ``False`` builds an object that lacks a mandatory
+        attribute rather than leaving it out, and reports it. Proteus has no such setting.
+    proteus : bool, optional
+        Read the file as ProteusXML (DEXPI 1.3).
+
+    Returns
+    -------
+    tuple of EngineeringModel and list of ErrorRegistryEntry
+        The model, and every entry the loader recorded.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the file does not exist.
+    ValueError
+        If the file format is not supported, or nothing could be loaded; a refused DEXPI 2.0
+        conversion is a ``ConversionRefusedError``, which is a ``ValueError``.
+    """
+    from pydexpi.loaders.public import load_json_with_report, load_xml_with_report
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    if proteus:
+        from pydexpi.loaders.proteus_serializer import ProteusSerializer
+
+        serializer = ProteusSerializer()
+        model = serializer.load_from_string(path.read_text(encoding="utf-8"))
+        registry = serializer.get_loading_errors()
+        entries = registry.get_errors() if hasattr(registry, "get_errors") else list(registry)
+        return model, list(entries)
+    suffix = path.suffix.lower()
+    if suffix == ".xml":
+        report = load_xml_with_report(path.read_bytes(), strict=strict)
+    elif suffix == ".json":
+        report = load_json_with_report(path.read_bytes(), strict=strict)
+    else:
+        raise ValueError(f"Unsupported file format: {suffix}. Expected .xml or .json")
+    return report.model, list(report.errors)
+
+
 def render_svg(model: EngineeringModel) -> str | None:
     """Render the model's diagram as SVG using pyDEXPI.
 
@@ -683,26 +738,35 @@ def render_svg(model: EngineeringModel) -> str | None:
 
 
 def _without_shapeless_usages(diagram: Any) -> Any:
-    """Return the diagram, or a copy without the shape usages whose shape did not load.
+    """Return the diagram, or a copy without what pyDEXPI 2.1.0's renderer cannot draw.
 
-    A strict load that refuses a ``Shape`` leaves every ``ShapeUsage`` of it with
-    ``shape=None``, and pyDEXPI 2.1.0's renderer raises on the first one, which costs
-    the whole drawing. There is nothing to draw for a missing shape, so the copy leaves
-    those usages out and the rest of the drawing renders. The loaded model is not changed.
-    Remove this once pyDEXPI's renderer skips such usages itself.
+    A strict load that refuses an object leaves what pointed at it empty, and the renderer
+    raises on the first such element, which costs the whole drawing:
+
+    - a ``ShapeUsage`` whose ``Shape`` was refused has ``shape=None``;
+    - a ``RepresentationGroup`` whose object was refused has ``represents=None``.
+
+    There is nothing to draw for either, so the copy leaves them out and the rest of the
+    drawing renders. The loaded model is not changed, and the Issues panel names what the
+    loader refused. Remove this once pyDEXPI's renderer skips such elements itself.
     """
-    from pydexpi.pydexpi_classes.pydexpi_classes import ShapeUsage
+    from pydexpi.pydexpi_classes.pydexpi_classes import RepresentationGroup, ShapeUsage
 
-    def is_shapeless(obj: Any) -> bool:
-        return isinstance(obj, ShapeUsage) and obj.shape is None
+    def undrawable(obj: Any) -> bool:
+        if isinstance(obj, ShapeUsage):
+            return obj.shape is None
+        if isinstance(obj, RepresentationGroup):
+            return obj.represents is None
+        return False
 
     def holders(obj: Any, seen: set[int]):
-        """Yield every object composed under *obj* that has an ``elements`` list."""
+        """Yield (object, list name) for every ``elements`` or ``groups`` list under *obj*."""
         if id(obj) in seen or not hasattr(type(obj), "model_fields"):
             return
         seen.add(id(obj))
-        if isinstance(getattr(obj, "elements", None), list):
-            yield obj
+        for name in ("elements", "groups"):
+            if isinstance(getattr(obj, name, None), list):
+                yield obj, name
         for name, field in type(obj).model_fields.items():
             extra = field.json_schema_extra
             if not isinstance(extra, dict) or extra.get("attribute_category") != "composition":
@@ -712,16 +776,19 @@ def _without_shapeless_usages(diagram: Any) -> Any:
                 yield from holders(child, seen)
 
     skipped = sum(
-        is_shapeless(element) for holder in holders(diagram, set()) for element in holder.elements
+        undrawable(item)
+        for holder, name in holders(diagram, set())
+        for item in getattr(holder, name)
     )
     if not skipped:
         return diagram
 
-    _log.warning("Not drawn: %d symbol(s) whose shape did not load", skipped)
+    _log.warning("Not drawn: %d element(s) whose shape or object did not load", skipped)
     copy = deepcopy(diagram)
-    for holder in list(holders(copy, set())):
-        if any(is_shapeless(element) for element in holder.elements):
-            holder.elements = [e for e in holder.elements if not is_shapeless(e)]
+    for holder, name in list(holders(copy, set())):
+        items = getattr(holder, name)
+        if any(undrawable(item) for item in items):
+            setattr(holder, name, [item for item in items if not undrawable(item)])
     return copy
 
 
@@ -915,53 +982,6 @@ def run_diff(model_old: EngineeringModel, model_new: EngineeringModel):
     from pydexpi.diff import PyDexpiDiffEngine, TagEquality
 
     return PyDexpiDiffEngine(TagEquality()).diff(model_old, model_new)
-
-
-def validate_model(model: EngineeringModel) -> list[dict]:
-    """Validate the loaded DEXPI model using pyDEXPI's built-in validation engine.
-
-    Parameters
-    ----------
-    model : EngineeringModel
-        The loaded DEXPI model.
-
-    Returns
-    -------
-    list[dict]
-        Validation messages with keys: level, message, source.
-    """
-    from pydexpi.validation import LevelOfRecommendation, validate
-
-    _level_map = {
-        LevelOfRecommendation.MANDATORY: "error",
-        LevelOfRecommendation.RECOMMENDED: "warning",
-        LevelOfRecommendation.OPTIONAL: "info",
-    }
-
-    issues = validate(model)
-
-    if not issues:
-        return [{"level": "info", "message": "No validation issues found.", "source": "Validation"}]
-
-    return [
-        {
-            "level": _level_map.get(issue.level_of_recommendation, "warning"),
-            "message": f"[{issue.applied_rule_id}] {issue.short_description}: {issue.long_description}",
-            "source": "Validation",
-        }
-        for issue in issues
-    ]
-
-
-def validation_status(messages: list[dict]) -> str:
-    """One line saying what :func:`validate_model` found, for the status bar."""
-    levels = [m["level"] for m in messages if m["level"] in {"error", "warning"}]
-    if not levels:
-        return "Validation: no issues found."
-    errors, warnings = levels.count("error"), levels.count("warning")
-    return (
-        f"Validation: {errors} mandatory and {warnings} recommended issue(s); see the Logs panel."
-    )
 
 
 def build_id_index(model: EngineeringModel) -> dict[str, object]:

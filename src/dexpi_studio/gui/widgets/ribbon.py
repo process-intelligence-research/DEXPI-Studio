@@ -791,6 +791,7 @@ class RibbonWidget(QWidget):
                 w.show_assistant_panel,
             )
         )
+        panels_grp.add(_CmdButton("Issues", _draw_validate, "Toggle Issues", w.toggle_issues))
         panels_grp.add(_CmdButton("Logs", _draw_messages, "Toggle Logs", w.toggle_messages))
         panels_grp.add(
             _CmdButton(

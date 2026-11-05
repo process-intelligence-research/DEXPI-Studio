@@ -105,6 +105,10 @@ def _create_menus(window: MainWindow) -> None:
     toggle_assistant_action.triggered.connect(window.toggle_assistant)
     view_menu.addAction(toggle_assistant_action)
 
+    toggle_issues_action = QAction("Toggle &Issues", window)
+    toggle_issues_action.triggered.connect(window.toggle_issues)
+    view_menu.addAction(toggle_issues_action)
+
     toggle_messages_action = QAction("Toggle &Logs", window)
     toggle_messages_action.triggered.connect(window.toggle_messages)
     view_menu.addAction(toggle_messages_action)
